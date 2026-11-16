@@ -81,6 +81,56 @@ test('connection check exposes controlled Drive failures and suppresses arbitrar
     assert.equal(h.messages.length, 0); assert.equal(h.store.disk.size, 0);
   }
 });
+test('index diagnostics require authentication and return only bounded job and folder telemetry', async () => {
+  const h = fixture();
+  assert.equal((await request(h.dashboard, 'getIndexDiagnostics')).status, 401);
+  await h.dashboard.startIndex();
+  const saved = await h.store.read(h.dashboard.key('work.json'));
+  saved.value.credentials = 'private-key-secret-value'; saved.value.work.files.push({ id: 'hidden-file', privateData: 'private-key-secret-value' });
+  await h.store.write(h.dashboard.key('work.json'), saved.value, saved.etag);
+  const cookie = await login(h.dashboard), before = h.store.disk.size;
+  const result = await request(h.dashboard, 'getIndexDiagnostics', {}, cookie);
+  assert.equal(result.status, 200); assert.equal(result.body.jobId, saved.value.id); assert.equal(result.body.run, 1);
+  assert.deepEqual(result.body.nextFolder, { id: ROOT, path: '', attempts: 0 });
+  assert.equal(result.body.stage, 'queued'); assert.equal(result.body.lastWorkerStartedAt, null);
+  assert.equal(result.body.currentFolder, null); assert(result.body.queuedAt);
+  assert.deepEqual(Object.keys(result.body).sort(), ['jobId', 'run', 'pages', 'nextFolder', 'currentFolder', 'published', 'paused', 'stage', 'queuedAt', 'lastWorkerStartedAt'].sort());
+  assert(!JSON.stringify(result.body).includes('private-key-secret-value')); assert(!JSON.stringify(result.body).includes('hidden-file'));
+  assert.equal(h.store.disk.size, before); assert.equal(h.messages.length, 1); assert.equal(h.calls.length, 0);
+});
+test('worker diagnostics persist reading and thumbnail stages before expensive operations', async () => {
+  let releaseRead, announceRead, releaseThumbnail, announceThumbnail;
+  const readStarted = new Promise(resolve => { announceRead = resolve; }), readGate = new Promise(resolve => { releaseRead = resolve; });
+  const thumbnailStarted = new Promise(resolve => { announceThumbnail = resolve; }), thumbnailGate = new Promise(resolve => { releaseThumbnail = resolve; });
+  const h = fixture({ batchPages: 8, drive: {
+    call: async () => { announceRead(); await readGate; return { files: [{ id: 'plot', name: 'plot.png', mimeType: 'image/png' }], summaries: {} }; },
+    thumbnail: async () => { announceThumbnail(); await thumbnailGate; return { dataUrl: '' }; }
+  } });
+  await h.dashboard.startIndex(); const cookie = await login(h.dashboard), processing = h.dashboard.processJob(h.messages.shift());
+  try {
+    await readStarted;
+    let result = (await request(h.dashboard, 'getIndexDiagnostics', {}, cookie)).body;
+    assert.equal(result.stage, 'reading folder'); assert(result.lastWorkerStartedAt);
+    assert.deepEqual(result.currentFolder, { id: ROOT, path: '', attempts: 0 });
+    releaseRead(); await thumbnailStarted;
+    result = (await request(h.dashboard, 'getIndexDiagnostics', {}, cookie)).body;
+    assert.equal(result.stage, 'caching thumbnails'); assert.equal(result.pages, 0);
+  } finally { releaseRead(); releaseThumbnail(); await processing; }
+  assert.equal((await request(h.dashboard, 'getIndexDiagnostics', {}, cookie)).body.stage, 'complete');
+});
+test('queue receipt is returned without a post-send write that could supersede a newly started worker', async () => {
+  let h;
+  h = fixture({ batchPages: 8, enqueue: async message => {
+    await h.dashboard.processJob(message);
+    return { messageId: 'queue-message-receipt' };
+  } });
+  const result = await h.dashboard.startIndex();
+  assert.equal(result.queueReceipt.messageId, 'queue-message-receipt');
+  const saved = (await h.store.read(h.dashboard.key('work.json'))).value;
+  assert.equal(saved.id, result.queueReceipt.jobId); assert.equal(saved.run, result.queueReceipt.run);
+  assert.equal(saved.published, true); assert.equal(saved.stage, 'complete');
+  assert.equal(saved.queueReceipt, undefined); assert.equal(saved.messageId, undefined);
+});
 test('background errors retain actionable controlled details while retrying and after pausing', async () => {
   const h = fixture({ drive: { call: async () => { throw Object.assign(Error('Configure the backend Google service account.'), { status: 503 }); } } });
   await h.dashboard.startIndex(); const message = h.messages.shift();
@@ -154,6 +204,7 @@ test('an older in-flight page failure cannot overwrite a resumed job or its visi
   failOldPage(Error('Configure the backend Google service account.')); await processing;
   const saved = (await h.store.read(h.dashboard.key('work.json'))).value, visible = await h.dashboard.status();
   assert.equal(saved.run, resumed.run); assert.equal(saved.error, ''); assert.equal(saved.paused, false);
+  assert.equal(saved.stage, 'queued'); assert.equal(saved.lastWorkerStartedAt, null); assert.equal(saved.currentFolder, null);
   assert.equal(visible.lastError, ''); assert.equal(visible.active, true); assert.equal(visible.scannedFolders, 1);
   await h.dashboard.processJob(resumed);
   assert.equal((await h.dashboard.status()).active, false);
@@ -181,7 +232,9 @@ test('Resume retries a worker checkpoint race, preserves scanned work, and queue
   assert.equal(saved.run, 2); assert.equal(saved.work.scannedFolders, 1);
   assert.equal(resumedStatus.scannedFolders, 1); assert.equal(resumedStatus.pendingFolders, 1);
   assert(h.messages.some(message => message.jobId === saved.id && message.run === saved.run), 'the successor generation must have a queue message');
-  assert.deepEqual(await h.restart().status(), resumedStatus);
+  const { queueReceipt, ...visibleStatus } = resumedStatus;
+  assert.equal(queueReceipt.run, saved.run);
+  assert.deepEqual(await h.restart().status(), visibleStatus);
   await h.drain();
   assert.equal((await h.dashboard.status()).active, false);
   assert.equal((await store.read(h.dashboard.key('current.json'))).value.files, 2);
