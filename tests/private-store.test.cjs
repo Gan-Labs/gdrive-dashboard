@@ -2,6 +2,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { privateStore } = require('../lib/private-store.cjs');
+test('identity reads preserve canonical strong ETags for conditional writes and cached polls', async () => {
+  const calls = []; let current = { pages: 8 }, etag = '"canonical-1"';
+  const store = privateStore({ sdk: async () => ({
+    get: async (key, options) => {
+      calls.push({ key, options });
+      const identity = options.headers?.['Accept-Encoding'] === 'identity';
+      const downloadETag = identity ? etag : 'W/' + etag;
+      if (options.ifNoneMatch === downloadETag) return { statusCode: 304, stream: null, blob: { etag: downloadETag } };
+      return { statusCode: 200, stream: new Blob([JSON.stringify(current)]).stream(), blob: { etag: downloadETag } };
+    },
+    put: async (_, json, options) => {
+      assert.equal(options.ifMatch, etag, 'conditional writes must receive the strong tag for the content read');
+      current = JSON.parse(json); etag = '"canonical-2"'; return { etag };
+    }
+  }) });
+  const first = await store.read('dashboard/root/work.json');
+  assert.equal(first.etag, '"canonical-1"');
+  assert.deepEqual(await store.read('dashboard/root/work.json'), first);
+  assert.equal(calls[1].options.ifNoneMatch, '"canonical-1"');
+  await store.write('dashboard/root/work.json', { pages: 9 }, first.etag);
+  assert.deepEqual(await store.read('dashboard/root/work.json'), { value: { pages: 9 }, etag: '"canonical-2"' });
+  assert.equal(calls[2].options.ifNoneMatch, '"canonical-2"');
+  await store.read('dashboard/root/preview.json', false);
+  assert.equal(calls.at(-1).options.useCache, true);
+  assert(calls.every(call => call.options.headers['Accept-Encoding'] === 'identity'));
+});
 test('storage diagnostics compare bounded ETags without returning bodies, URLs or credentials', async () => {
   const calls = [];
   const store = privateStore({ token: 'private-fixture-token', sdk: async () => ({
