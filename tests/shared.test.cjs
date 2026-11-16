@@ -151,13 +151,40 @@ test('an older in-flight page failure cannot overwrite a resumed job or its visi
   await nextStarted;
   await h.dashboard.startIndex(); const resumed = h.messages.shift();
   assert.notEqual(resumed.run, old.run);
-  const failed = assert.rejects(processing, error => error.status === 409);
-  failOldPage(Error('Configure the backend Google service account.')); await failed;
+  failOldPage(Error('Configure the backend Google service account.')); await processing;
   const saved = (await h.store.read(h.dashboard.key('work.json'))).value, visible = await h.dashboard.status();
   assert.equal(saved.run, resumed.run); assert.equal(saved.error, ''); assert.equal(saved.paused, false);
   assert.equal(visible.lastError, ''); assert.equal(visible.active, true); assert.equal(visible.scannedFolders, 1);
   await h.dashboard.processJob(resumed);
   assert.equal((await h.dashboard.status()).active, false);
+});
+test('Resume retries a worker checkpoint race, preserves scanned work, and queues the successor without a separate status write', async () => {
+  const store = memoryStore(), read = store.read, write = store.write;
+  let h, oldMessage, race = false;
+  store.read = async path => {
+    assert(!path.endsWith('status.json'), 'status must come from the work checkpoint');
+    return read(path);
+  };
+  store.write = async (path, value, etag) => {
+    assert(!path.endsWith('status.json'), 'a second status write must not orphan a saved generation');
+    if (race && path.endsWith('work.json') && value.run === 2) {
+      race = false;
+      // Resume has already read the old ETag; commit another worker page now.
+      await h.dashboard.processJob(oldMessage);
+    }
+    return write(path, value, etag);
+  };
+  h = fixture({ store });
+  await h.dashboard.startIndex(); oldMessage = h.messages.shift(); race = true;
+  const resumedStatus = await h.dashboard.startIndex();
+  const saved = (await store.read(h.dashboard.key('work.json'))).value;
+  assert.equal(saved.run, 2); assert.equal(saved.work.scannedFolders, 1);
+  assert.equal(resumedStatus.scannedFolders, 1); assert.equal(resumedStatus.pendingFolders, 1);
+  assert(h.messages.some(message => message.jobId === saved.id && message.run === saved.run), 'the successor generation must have a queue message');
+  assert.deepEqual(await h.restart().status(), resumedStatus);
+  await h.drain();
+  assert.equal((await h.dashboard.status()).active, false);
+  assert.equal((await store.read(h.dashboard.key('current.json'))).value.files, 2);
 });
 test('a second collaborator sees the saved index and cached thumbnail without scanning or Drive access', async () => {
   const h = fixture(); await h.dashboard.startIndex(); await h.drain();

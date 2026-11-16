@@ -48,6 +48,8 @@ Keep the existing build settings: **Other**, `npm run build`, output `public`, N
 
 If the queue or Drive connection fails, work pauses/resumes from a stored checkpoint. Folder-page progress is saved as each page completes. The index banner shows connection errors immediately, including invalid service-account settings, a disabled Drive API, inaccessible folders, and rate limits. Repeated failures stop retrying and show a Resume action. Enable Drive API in the Google Cloud project that owns the service-account credentials, not only the project that owns the personal OAuth client. Check the Vercel worker logs and service-account sharing before resuming. Workers use conditional writes to avoid concurrent viewers corrupting progress. An expired pagination cursor restarts only the current folder with file-ID deduplication.
 
+Status comes from that same durable checkpoint, so a conflicting status write cannot strand a resumed worker. Reopening an active scan watches its progress without restarting it. The private storage adapter validates checkpoint ETags at the origin and reuses unchanged data, avoiding repeated downloads of the full folder tree during polling.
+
 ## Saved research boards
 
 In shared mode, **Research boards** appears in the sidebar. Create a named board, or use **Pin to board** on a figure/file. Experiment details have **Pin metrics to board**; CSV sources appear as tables, and images/charts use cached previews. Multiple selected figures can be pinned together from the selection tray.

@@ -9,7 +9,8 @@ const { createSharedDashboard } = require('../lib/shared.cjs');
 const { ROOT, PNG } = require('../tests/harness.cjs');
 const root = path.resolve(__dirname, '..'), PASSWORD = 'demo';
 async function main() {
-  const disk = new Map(), queue = []; let etag = 0, working = false, listCalls = 0, originalCalls = 0;
+  const disk = new Map(), queue = []; let etag = 0, working = false, listCalls = 0, originalCalls = 0, startCalls = 0, releaseRoot;
+  const rootGate = new Promise(resolve => { releaseRoot = resolve; });
   const store = { async read(key) { return disk.has(key) ? structuredClone(disk.get(key)) : null; },
     async write(key, value, match) {
       const previous = disk.get(key);
@@ -22,6 +23,7 @@ async function main() {
     if (action === 'getPreview') { if (args.original) originalCalls++; return { ...previews, original: !!args.original }; }
     if (action === 'getFileDetail') return args.id === 'scores' ? { text: '', table: { rows: [['Method', 'Score'], ['Fixture model', '0.75']], totalRows: 1, truncated: false }, note: '' } : { text: '{"fixture":true}', table: null, note: '' };
     listCalls++;
+    if (args.id === ROOT) await rootGate;
     await new Promise(resolve => setTimeout(resolve, 150));
     if (args.id === ROOT) return { files: [{ id: 'group', name: 'ResNet HMDB51', mimeType: 'application/vnd.google-apps.folder' }], summaries: {}, warnings: [] };
     return { files: [...Array.from({ length: 3 }, (_, i) => ({ id: 'plot' + i, name: 'accuracy_' + i + '.png',
@@ -44,7 +46,9 @@ async function main() {
     if (req.url.startsWith('/api/original?')) return app.fileHandler(req, res);
     if (req.url === '/api/dashboard') {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
-      req.body = Buffer.concat(chunks).toString('utf8'); return app.handler(req, res);
+      req.body = Buffer.concat(chunks).toString('utf8');
+      if (JSON.parse(req.body).action === 'startIndex') startCalls++;
+      return app.handler(req, res);
     }
     const pathname = new URL(req.url, 'http://localhost').pathname;
     const name = pathname === '/' ? 'index.html' : pathname.slice(1);
@@ -79,6 +83,10 @@ async function main() {
     await page.getByRole('button', { name: 'Start indexing Figures' }).click();
     await page.waitForFunction(() => document.querySelector('#refresh').disabled);
     await page.close();
+    page = await context.newPage(); await page.goto(origin);
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('Indexing Figures') && document.querySelector('#refresh').disabled);
+    assert.equal(startCalls, 1, 'Reopening an active shared scan must watch it without restarting its worker'); checks++;
+    await page.close(); releaseRoot();
     // Worker/server keep running without any page or browser polling.
     let remaining = 50;
     while ((working || queue.length || !disk.has(app.key('current.json'))) && remaining-- > 0) await new Promise(resolve => setTimeout(resolve, 100));
@@ -88,14 +96,14 @@ async function main() {
     assert.equal(await page.locator('.figure-card').count(), 3); assert.equal(listCalls, scanned); checks++;
     await page.reload(); await page.waitForSelector('.figure-card');
     assert.equal(await page.locator('#sharedAuth[open]').count(), 0); assert.equal(listCalls, scanned); checks++;
-    const savedStatus = structuredClone(disk.get(app.key('status.json')));
-    disk.get(app.key('status.json')).value = { ...savedStatus.value, active: false, paused: true,
-      lastError: 'Your Google account cannot access this Figures file or folder.' };
+    const savedWork = structuredClone(disk.get(app.key('work.json')));
+    disk.get(app.key('work.json')).value = { ...savedWork.value, paused: true,
+      error: 'Your Google account cannot access this Figures file or folder.' };
     await page.reload(); await page.waitForSelector('.figure-card');
     assert.match(await page.locator('#notice').innerText(), /Your Google account cannot access this Figures file or folder/);
     assert.match(await page.locator('#notice').innerText(), /paused/i);
     assert.match(await page.locator('#refresh').innerText(), /Resume index/); checks++;
-    disk.set(app.key('status.json'), savedStatus);
+    disk.set(app.key('work.json'), savedWork);
     await page.reload(); await page.waitForSelector('.figure-card');
     await page.waitForSelector('.image-placeholder img'); assert.equal(originalCalls, 0); checks++;
     await page.locator('.open-figure').first().click(); await page.waitForSelector('#viewerBody img');
@@ -182,6 +190,6 @@ async function main() {
     assert.deepEqual(googleRequests, []); checks++; assert.deepEqual(errors, []);
     const report = { passed: checks, browser: await browser.version(), scope: 'Built shared browser, real shared API/indexer/boards, synthetic private storage/Drive/queue. Covers closed-tab indexing, cookie auth, lazy originals, board figure/CSV/metrics/note pins, drag/resize/keyboard, reload, second collaborator, revision conflict/copy, mobile and sign-out. No deployed credentials or real Vercel storage/queue tested.' };
     fs.writeFileSync(path.join(root, 'test-artifacts/shared-browser-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report));
-  } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
+  } finally { releaseRoot(); if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
 }
 main().catch(error => { console.error(error.stack); process.exitCode = 1; });

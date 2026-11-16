@@ -10,6 +10,8 @@ module.exports = (req, res) => {
       if (!message || typeof message.jobId !== 'string') return;
       try { await runtime().processJob(message); }
       catch (error) {
+        // Another worker or an explicit Resume owns the newer checkpoint.
+        if (error.status === 409) return;
         if (metadata.deliveryCount >= 5) { await runtime().pauseJob(message.jobId, message.run); return; }
         throw new Error('Shared indexing failed. Check backend Drive access and private storage; the saved checkpoint will be retried.');
       }

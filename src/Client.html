@@ -113,6 +113,7 @@
       state.catalog = response.catalog; state.status = response.status;
       hydrateFilters(); render(); updateStatus();
       document.dispatchEvent(new CustomEvent('entropy:catalog'));
+      if (window.entropyTransport?.shared && state.status?.active && !state.scanning) scan(false, true);
     } catch (error) {
       if (token !== loadToken) return;
       $('indexedAt').textContent = 'Connection needs attention';
@@ -168,11 +169,11 @@
     }
   }
 
-  async function scan(schedule) {
+  async function scan(schedule, watchOnly) {
     if (state.scanning) return;
     state.scanning = true; $('error').hidden = true; updateStatus();
     try {
-      state.status = await rpc(schedule ? 'setup' : 'startIndex');
+      if (!watchOnly) state.status = await rpc(schedule ? 'setup' : 'startIndex');
       updateStatus();
       let batches = 0;
       while (state.status.active) {
@@ -481,7 +482,7 @@
   $('savedResults').addEventListener('click', function () { selectCollection('', true); });
   $('refresh').addEventListener('click', function () { scan(false); });
   $('enableSchedule').addEventListener('click', function () { scan(true); });
-  $('retry').addEventListener('click', function () { state.status && state.status.active ? scan(false) : load(); });
+  $('retry').addEventListener('click', function () { state.status && state.status.active ? scan(false, !!window.entropyTransport?.shared) : load(); });
   $('clearFilters').addEventListener('click', clearFilters);
   $('search').addEventListener('input', function () { state.query = $('search').value; state.limit = 48; render(); remember(); });
   filterKeys.forEach(function (key) { $(key).addEventListener('change', function () { state.filters[key] = $(key).value; state.limit = 48; render(); remember(); }); });
