@@ -2,6 +2,16 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { privateStore } = require('../lib/private-store.cjs');
+test('storage diagnostics compare bounded ETags without returning bodies, URLs or credentials', async () => {
+  const calls = [];
+  const store = privateStore({ token: 'private-fixture-token', sdk: async () => ({
+    get: async (_, options) => { calls.push(options); return { stream: new Blob(['private-body']).stream(),
+      blob: { etag: options.headers ? 'identity' : 'download', url: 'private-url' }, headers: new Headers({ 'content-encoding': options.headers ? 'identity' : 'gzip' }) }; },
+    head: async () => ({ etag: 'canonical', url: 'private-url' })
+  }) });
+  assert.deepEqual(await store.inspect('work.json'), { downloadETag: 'download', identityETag: 'identity', canonicalETag: 'canonical', downloadEncoding: 'gzip', identityEncoding: 'identity' });
+  assert.equal(calls[0].useCache, false); assert.equal(calls[1].headers['Accept-Encoding'], 'identity');
+});
 test('work polls validate the origin ETag without downloading unchanged checkpoints or sharing mutable cached objects', async () => {
   const calls = []; let version = 'v1';
   const store = privateStore({ sdk: async () => ({ get: async (key, options) => {
