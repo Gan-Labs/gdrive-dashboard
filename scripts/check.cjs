@@ -21,7 +21,7 @@ assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
 assert(manifest.dependencies.enabledAdvancedServices.some(s => s.userSymbol === 'Drive' && s.version === 'v3'));
 assert.equal(manifest.runtimeVersion, 'V8');
 console.log('Source syntax, template includes, and private deployment manifest: PASS');
-for (const directory of ['api', 'web', 'scripts']) for (const file of fs.readdirSync(path.join(root, directory))) {
+for (const directory of ['api', 'web', 'scripts', 'lib']) for (const file of fs.readdirSync(path.join(root, directory))) {
   if (/\.(js|cjs)$/.test(file)) new vm.Script(fs.readFileSync(path.join(root, directory, file), 'utf8'), { filename: directory + '/' + file });
 }
 const vercel = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8'));

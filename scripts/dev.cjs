@@ -11,9 +11,10 @@ for (const name of ['.env.local', '.env']) {
 require('./build.cjs');
 const handler = require('../api/dashboard.js');
 const types = { '.html': 'text/html', '.js': 'text/javascript' };
-const files = new Set(['index.html', 'core.js', 'config.js', 'indexer.js', 'vercel.js']);
+const files = new Set(['index.html', 'core.js', 'config.js', 'indexer.js', 'vercel.js', 'shared.js']);
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/api/original') return require('../api/original.js')(req, res);
   if (url.pathname === '/api/dashboard') {
     let size = 0; const chunks = [];
     for await (const chunk of req) {

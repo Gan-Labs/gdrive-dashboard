@@ -30,6 +30,7 @@
     node.href = url; node.target = '_blank'; node.rel = 'noopener noreferrer'; return node;
   }
   function driveUrl(id, folder) {
+    if (!folder && window.entropyTransport?.shared) return window.entropyTransport.fileUrl(id);
     return 'https://drive.google.com/' + (folder ? 'drive/folders/' : 'file/d/') + encodeURIComponent(id) + (folder ? '' : '/view');
   }
   function rpc(name) {
@@ -138,11 +139,15 @@
     const s = state.status || {};
     const c = state.catalog;
     $('refresh').disabled = state.scanning;
-    $('refresh').textContent = state.scanning ? 'Indexing…' : s.active ? 'Resume index ↻' : 'Refresh index ↻';
+    $('refresh').textContent = state.scanning ? 'Indexing…' : s.active || s.paused ? 'Resume index ↻' : 'Refresh index ↻';
     $('indexedAt').textContent = c && c.indexedAt ? 'Indexed ' + dateLabel(c.indexedAt, true) : 'First index pending';
     $('scheduleLabel').textContent = s.scheduled ? (window.entropyTransport ? 'Refresh every 6 hours while open' : 'Automatic refresh every 6 hours') : 'Private research workspace';
     if (window.entropyTransport) $('enableSchedule').textContent = 'Enable refresh while open';
-    $('enableSchedule').hidden = !!s.scheduled || state.scanning;
+    $('enableSchedule').hidden = !!s.scheduled || state.scanning || !!window.entropyTransport?.shared;
+    if (window.entropyTransport?.shared) {
+      $('scheduleLabel').textContent = 'Shared saved catalog';
+      $('footerStatus').textContent = 'Shared index and thumbnails are saved on the backend. Research originals stay in Google Drive.';
+    }
     const notice = $('notice'); notice.replaceChildren(); notice.hidden = true;
     if (s.active || state.scanning) {
       notice.hidden = false;
@@ -154,7 +159,7 @@
     if (warnings.length) {
       notice.hidden = false;
       const details = element('details');
-      details.append(element('summary', '', warnings.length + ' metadata files need attention. Original files remain available.'));
+      details.append(element('summary', '', warnings.length + ' index warnings. Original files remain available.'));
       details.append(element('pre', '', warnings.map(function (w) { return w.path + ': ' + w.message; }).join('\n')));
       notice.append(details);
     }
@@ -172,7 +177,9 @@
         updateStatus(); batches++;
         if (batches % 2 === 0 || !state.status.active) await load();
       }
-      await load(); toast('Results catalog is up to date.');
+      await load();
+      if (state.status.lastError) throw new Error(state.status.lastError);
+      toast('Results catalog is up to date.');
     } catch (error) { showError(error); }
     finally { state.scanning = false; updateStatus(); }
   }
@@ -340,10 +347,11 @@
       const response = await preview(id, original);
       if (!holder.isConnected || (token !== undefined && token !== state.modalToken)) return;
       holder.replaceChildren();
-      if (response.dataUrl && /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i.test(response.dataUrl)) {
+      const sharedImage = window.entropyTransport?.shared && /^\/api\/original\?id=[\w-]+$/.test(response.url || '');
+      if (sharedImage || (response.dataUrl && /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i.test(response.dataUrl))) {
         const image = element('img'); image.alt = state.catalog.records.find(function (r) { return r.id === id; })?.name || 'Result figure';
         image.addEventListener('error', function () { holder.replaceChildren(element('span', 'preview-note', 'Preview could not be displayed. Open the original in Drive.')); });
-        image.src = response.dataUrl; holder.append(image);
+        image.src = sharedImage ? response.url : response.dataUrl; holder.append(image);
       } else holder.append(element('span', 'preview-note', response.note || 'Preview unavailable. Open the original in Drive.'));
       if (response.note && response.dataUrl && original) holder.append(element('p', 'preview-note', response.note));
     } catch (_) {
@@ -376,7 +384,7 @@
       ['Class', record.className], ['Bitrate', record.bitrate], ['GOP', record.gop], ['State', record.state],
       ['Updated', dateLabel(record.modifiedTime, true)], ['File size', bytes(record.size)], ['Path', record.path]]
       .forEach(function (pair) { addDescription(dl, pair[0], pair[1]); });
-    info.append(dl, link('Open original in Drive ↗', driveUrl(record.id), 'button primary'), link('Open experiment folder ↗', driveUrl(record.parentId, true), 'button'));
+    info.append(dl, link(window.entropyTransport?.shared ? 'Open / download original ↗' : 'Open original in Drive ↗', driveUrl(record.id), 'button primary'), link('Open experiment folder ↗', driveUrl(record.parentId, true), 'button'));
     const related = (record.relatedIds || []).map(function (id) { return state.catalog.records.find(function (r) { return r.id === id; }); }).filter(Boolean);
     if (related.length) {
       info.append(element('h3', '', 'Metadata & source files'));

@@ -2,7 +2,9 @@
 
 Browse research figures, nested experiment folders, metrics, and metadata in Google Drive. Search, filters, favorites, file previews, and side-by-side comparisons use the existing explorer UI.
 
-The recovered local project was a Google Apps Script app, rather than a Firebase app. It now includes a Vercel target: static browser assets plus one Node.js function at `/api/dashboard`. Vercel runs the build with Node.js 22. No Firebase project, database, service-account key, or Apps Script deployment is needed for this target.
+The recovered local project was a Google Apps Script app, rather than a Firebase app. It now includes a Vercel target with static browser assets and Node.js functions, using Node.js 22. Personal mode connects each viewer's Google account. Shared mode uses one backend Drive account and a persistent common catalog.
+
+**For collaborators: use [shared backend mode](SHARED-SETUP.md).** It connects Drive once on the server, saves a common catalog and thumbnails in private Vercel Blob storage, and rebuilds through Vercel Queues. Viewers enter a shared dashboard password and do not connect Google Drive. A refresh loads the existing catalog; re-indexing is an explicit background job. Shared mode adds server credentials and durable storage; the personal OAuth setup below remains available by default until `DASHBOARD_MODE=shared` is configured.
 
 ## Deploy on Vercel
 
@@ -54,6 +56,9 @@ npm test
 npm run build
 node scripts/browser-qa.cjs
 node scripts/vercel-browser-qa.cjs
+# Test the shared build separately:
+DASHBOARD_MODE=shared npm run build
+node scripts/shared-browser-qa.cjs
 ```
 
 Browser checks use synthetic results and require Playwright's Chromium (or `ENTROPY_CHROME` pointing at an existing compatible browser). If absent, install the test browser with `npx playwright-core install chromium`. They test the local UI/API/indexing contract, not Google's real consent popup or deployed previews.
@@ -63,8 +68,12 @@ Browser checks use synthetic results and require Playwright's Chromium (or `ENTR
 | Path | Purpose |
 | --- | --- |
 | `api/dashboard.js` | Stateless Vercel Node function; authenticated, bounded Drive reads. |
+| `api/index-worker.js`, `lib/shared*.cjs` | Shared catalog API, password sessions, and durable background worker. |
+| `api/original.js` | Authenticated, on-demand streaming of originals in shared mode. |
+| `lib/owner-drive.cjs`, `private-store.cjs` | Read-only backend Google account and private Blob storage adapter. |
 | `web/vercel.js` | Google connection, API transport, account-partitioned browser storage. |
 | `web/indexer.js` | Resumable folder scan and atomic completed snapshots. |
+| `web/shared.js` | Shared password entry and saved-catalog viewer. |
 | `src/Core.gs` | Shared pure path classification and metric/catalog transformations. |
 | `src/Index.html`, `Client.html`, `Styles.html` | Existing explorer interface. |
 | `scripts/build.cjs`, `dev.cjs` | Static build and local API server. |
