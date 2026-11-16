@@ -63,6 +63,19 @@ test('Vercel upstream auth failures and malformed requests produce bounded, cred
   assert.equal(response.status, 401); assert(!JSON.stringify(response).includes('secret-upstream-token'));
   assert.equal((await invoke(handler, '{')).status, 400);
 });
+test('disabled Google Drive API is distinguished from missing folder access without exposing upstream details', async () => {
+  for (const error of [
+    { errors: [{ reason: 'accessNotConfigured' }], message: 'private-upstream-context' },
+    { details: [{ reason: 'SERVICE_DISABLED' }], message: 'private-upstream-context' }
+  ]) {
+    const handler = createHandler({ rootId: ROOT, fetchImpl: async () => Response.json({ error }, { status: 403 }) });
+    const response = await invoke(handler, { action: 'listFolder', id: ROOT });
+    assert.equal(response.status, 403); assert.match(response.body.error, /Google Drive API is disabled/);
+    assert(!JSON.stringify(response).includes('private-upstream-context'));
+  }
+  const handler = createHandler({ rootId: ROOT, fetchImpl: async () => Response.json({ error: { message: 'private-upstream-context' } }, { status: 403 }) });
+  assert.match((await invoke(handler, { action: 'listFolder', id: ROOT })).body.error, /cannot access this Figures/);
+});
 test('CSV previews handle quoted commas/newlines and cap rows/columns', () => {
   assert.deepEqual(parseCsv('a,b\r\n"x,y","one\ntwo"\r\n').rows, [['a', 'b'], ['x,y', 'one\ntwo']]);
   assert.equal(parseCsv('header\n' + Array(200).fill('value').join('\n')).totalRows, 200);

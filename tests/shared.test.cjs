@@ -58,6 +58,49 @@ test('shared password gate works without Google login and is retained by a secur
   const changedPassword = fixture({ password: 'different-password-of-adequate-length' }).dashboard;
   assert.equal((await request(changedPassword, 'session', {}, result.cookie)).status, 401);
 });
+test('connection check requires authentication, reads only the configured root, and returns minimal metadata', async () => {
+  const calls = [], h = fixture({ drive: { call: async (action, args) => {
+    calls.push({ action, args });
+    return { id: ROOT, name: 'Figures', mimeType: FOLDER, thumbnailLink: 'private-thumbnail', account: 'private-account' };
+  } } });
+  assert.equal((await request(h.dashboard, 'checkConnection')).status, 401);
+  assert.equal(calls.length, 0);
+  const cookie = await login(h.dashboard), result = await request(h.dashboard, 'checkConnection', { id: 'outside' }, cookie);
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { connected: true, folder: { id: ROOT, name: 'Figures' } });
+  assert.deepEqual(calls, [{ action: 'getMetadata', args: { id: ROOT } }]);
+  assert.equal(h.messages.length, 0); assert.equal(h.store.disk.size, 0);
+});
+test('connection check exposes controlled Drive failures and suppresses arbitrary injected secrets', async () => {
+  const disabled = 'Google Drive API is disabled for the project that owns these credentials. Enable Google Drive API in that Google Cloud project, then resume the index.';
+  for (const [message, expected] of [[disabled, disabled], ['private-key-secret-value', 'The backend Drive connection failed.']]) {
+    const h = fixture({ drive: { call: async () => { throw Object.assign(Error(message), { status: 503 }); } } });
+    const cookie = await login(h.dashboard), result = await request(h.dashboard, 'checkConnection', {}, cookie);
+    assert.equal(result.status, 503); assert(result.body.error.startsWith(expected));
+    assert(!JSON.stringify(result.body).includes('private-key-secret-value'));
+    assert.equal(h.messages.length, 0); assert.equal(h.store.disk.size, 0);
+  }
+});
+test('background errors retain actionable controlled details while retrying and after pausing', async () => {
+  const h = fixture({ drive: { call: async () => { throw Object.assign(Error('Configure the backend Google service account.'), { status: 503 }); } } });
+  await h.dashboard.startIndex(); const message = h.messages.shift();
+  await assert.rejects(h.dashboard.processJob(message), /Configure the backend/);
+  let result = await h.dashboard.status();
+  assert.equal(result.active, true); assert.equal(result.paused, false);
+  assert.match(result.lastError, /credentials are missing or incomplete/);
+  assert.match(result.lastError, /GOOGLE_SERVICE_ACCOUNT_JSON/);
+  await h.dashboard.pauseJob(message.jobId, message.run); result = await h.dashboard.status();
+  assert.equal(result.active, false); assert.equal(result.paused, true);
+  assert.match(result.lastError, /credentials are missing or incomplete/);
+});
+test('background diagnostic status does not expose arbitrary injected error messages', async () => {
+  const h = fixture({ drive: { call: async () => { throw Error('private-key-secret-value'); } } });
+  await h.dashboard.startIndex(); const message = h.messages.shift();
+  await assert.rejects(h.dashboard.processJob(message));
+  assert(!JSON.stringify(await h.dashboard.status()).includes('private-key-secret-value'));
+  await h.dashboard.pauseJob(message.jobId, message.run);
+  assert(!JSON.stringify(await h.dashboard.status()).includes('private-key-secret-value'));
+});
 test('indexing runs through persisted queued jobs without a browser and survives cold starts', async () => {
   const h = fixture(), cookie = await login(h.dashboard);
   await request(h.dashboard, 'startIndex', {}, cookie);
@@ -72,6 +115,49 @@ test('indexing runs through persisted queued jobs without a browser and survives
   }
   assert.equal(new Set(entries.map(x => x.id)).size, 2);
   assert(!h.calls.some(c => c.action === 'getPreview'), 'Indexing must not download original images');
+});
+test('completed page progress is stored while the next page is still being scanned', async () => {
+  let releaseNext, announceNext, reads = 0;
+  const nextStarted = new Promise(resolve => { announceNext = resolve; });
+  const nextPage = new Promise(resolve => { releaseNext = resolve; });
+  const h = fixture({ batchPages: 8, drive: { call: async () => {
+    if (++reads === 1) return { files: [{ id: 'child', name: 'Experiment', mimeType: FOLDER }, { id: 'notes', name: 'notes.txt', mimeType: 'text/plain' }], summaries: {} };
+    announceNext(); await nextPage;
+    return { files: [], summaries: {} };
+  } } });
+  await h.dashboard.startIndex(); const message = h.messages.shift();
+  const processing = h.dashboard.processJob(message);
+  try {
+    await nextStarted;
+    const visible = await h.restart().status();
+    assert.equal(visible.active, true); assert.equal(visible.scannedFolders, 1);
+    assert.equal(visible.files, 1); assert.equal(visible.pendingFolders, 1);
+    const saved = (await h.store.read(h.dashboard.key('work.json'))).value;
+    assert.equal(saved.work.scannedFolders, 1); assert.equal(saved.work.queue[0].id, 'child');
+  } finally { releaseNext(); await processing; }
+  const finished = await h.dashboard.status();
+  assert.equal(finished.active, false); assert.equal(finished.scannedFolders, 2); assert.equal(finished.files, 1);
+});
+test('an older in-flight page failure cannot overwrite a resumed job or its visible status', async () => {
+  let failOldPage, announceNext, reads = 0;
+  const nextStarted = new Promise(resolve => { announceNext = resolve; });
+  const oldPage = new Promise((_, reject) => { failOldPage = reject; });
+  const h = fixture({ batchPages: 8, drive: { call: async () => {
+    if (++reads === 1) return { files: [{ id: 'child', name: 'Experiment', mimeType: FOLDER }], summaries: {} };
+    if (reads === 2) { announceNext(); await oldPage; }
+    return { files: [], summaries: {} };
+  } } });
+  await h.dashboard.startIndex(); const old = h.messages.shift(), processing = h.dashboard.processJob(old);
+  await nextStarted;
+  await h.dashboard.startIndex(); const resumed = h.messages.shift();
+  assert.notEqual(resumed.run, old.run);
+  const failed = assert.rejects(processing, error => error.status === 409);
+  failOldPage(Error('Configure the backend Google service account.')); await failed;
+  const saved = (await h.store.read(h.dashboard.key('work.json'))).value, visible = await h.dashboard.status();
+  assert.equal(saved.run, resumed.run); assert.equal(saved.error, ''); assert.equal(saved.paused, false);
+  assert.equal(visible.lastError, ''); assert.equal(visible.active, true); assert.equal(visible.scannedFolders, 1);
+  await h.dashboard.processJob(resumed);
+  assert.equal((await h.dashboard.status()).active, false);
 });
 test('a second collaborator sees the saved index and cached thumbnail without scanning or Drive access', async () => {
   const h = fixture(); await h.dashboard.startIndex(); await h.drain();

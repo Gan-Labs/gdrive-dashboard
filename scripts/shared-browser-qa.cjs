@@ -18,6 +18,7 @@ async function main() {
     } };
   const previews = { dataUrl: 'data:image/png;base64,' + PNG, original: false, note: '' };
   const drive = { async call(action, args) {
+    if (action === 'getMetadata') return { id: ROOT, name: 'Figures', mimeType: 'application/vnd.google-apps.folder' };
     if (action === 'getPreview') { if (args.original) originalCalls++; return { ...previews, original: !!args.original }; }
     if (action === 'getFileDetail') return args.id === 'scores' ? { text: '', table: { rows: [['Method', 'Score'], ['Fixture model', '0.75']], totalRows: 1, truncated: false }, note: '' } : { text: '{"fixture":true}', table: null, note: '' };
     listCalls++;
@@ -74,6 +75,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('#sharedAuth').textContent.includes('Incorrect')); checks++;
     await page.getByLabel('Dashboard password').fill(PASSWORD); await page.getByRole('button', { name: 'Open dashboard' }).click();
     await page.getByRole('button', { name: 'Start indexing Figures' }).waitFor(); checks++;
+    assert.deepEqual(await page.evaluate(() => window.entropyTransport.boardApi('checkConnection')), { connected: true, folder: { id: ROOT, name: 'Figures' } }); checks++;
     await page.getByRole('button', { name: 'Start indexing Figures' }).click();
     await page.waitForFunction(() => document.querySelector('#refresh').disabled);
     await page.close();
@@ -86,6 +88,15 @@ async function main() {
     assert.equal(await page.locator('.figure-card').count(), 3); assert.equal(listCalls, scanned); checks++;
     await page.reload(); await page.waitForSelector('.figure-card');
     assert.equal(await page.locator('#sharedAuth[open]').count(), 0); assert.equal(listCalls, scanned); checks++;
+    const savedStatus = structuredClone(disk.get(app.key('status.json')));
+    disk.get(app.key('status.json')).value = { ...savedStatus.value, active: false, paused: true,
+      lastError: 'Your Google account cannot access this Figures file or folder.' };
+    await page.reload(); await page.waitForSelector('.figure-card');
+    assert.match(await page.locator('#notice').innerText(), /Your Google account cannot access this Figures file or folder/);
+    assert.match(await page.locator('#notice').innerText(), /paused/i);
+    assert.match(await page.locator('#refresh').innerText(), /Resume index/); checks++;
+    disk.set(app.key('status.json'), savedStatus);
+    await page.reload(); await page.waitForSelector('.figure-card');
     await page.waitForSelector('.image-placeholder img'); assert.equal(originalCalls, 0); checks++;
     await page.locator('.open-figure').first().click(); await page.waitForSelector('#viewerBody img');
     assert.equal(originalCalls, 1); checks++;

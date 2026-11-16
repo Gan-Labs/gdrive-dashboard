@@ -140,7 +140,7 @@
     const s = state.status || {};
     const c = state.catalog;
     $('refresh').disabled = state.scanning;
-    $('refresh').textContent = state.scanning ? 'Indexing…' : s.active || s.paused ? 'Resume index ↻' : 'Refresh index ↻';
+    $('refresh').textContent = s.paused ? 'Resume index ↻' : state.scanning ? (s.lastError ? 'Waiting to retry…' : 'Indexing…') : s.active ? 'Resume index ↻' : 'Refresh index ↻';
     $('indexedAt').textContent = c && c.indexedAt ? 'Indexed ' + dateLabel(c.indexedAt, true) : 'First index pending';
     $('scheduleLabel').textContent = s.scheduled ? (window.entropyTransport ? 'Refresh every 6 hours while open' : 'Automatic refresh every 6 hours') : 'Private research workspace';
     if (window.entropyTransport) $('enableSchedule').textContent = 'Enable refresh while open';
@@ -150,11 +150,13 @@
       $('footerStatus').textContent = 'Shared index and thumbnails are saved on the backend. Research originals stay in Google Drive.';
     }
     const notice = $('notice'); notice.replaceChildren(); notice.hidden = true;
-    if (s.active || state.scanning) {
+    if (s.active || s.paused || state.scanning || s.lastError) {
       notice.hidden = false;
-      notice.append(element('span', '', 'Indexing Figures · ' + (s.scannedFolders || 0) + ' folders scanned · ' + (s.files || 0) + ' files found · ' + (s.pendingFolders || 0) + ' folders queued. ' +
-        (c && c.complete ? 'Showing the last completed catalog.' : 'Results appear as the scan progresses.')));
-      if (!state.scanning) notice.append(button('Resume index', 'button', function () { scan(false); }));
+      const label = s.paused ? 'Index paused' : s.lastError ? 'Index waiting to retry' : 'Indexing Figures';
+      const visibility = c && c.complete ? 'Showing the last completed catalog.' : window.entropyTransport?.shared ? 'The shared catalog appears when this scan completes.' : 'Results appear as the scan progresses.';
+      notice.append(element('span', '', label + ' · ' + (s.scannedFolders || 0) + ' folders scanned · ' + (s.files || 0) + ' files found · ' + (s.pendingFolders || 0) + ' folders queued. ' + visibility));
+      if (s.lastError) notice.append(element('p', '', s.lastError));
+      if (!state.scanning && (s.active || s.paused)) notice.append(button('Resume index', 'button', function () { scan(false); }));
     }
     const warnings = c && c.warnings || [];
     if (warnings.length) {
