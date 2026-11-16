@@ -1,0 +1,11 @@
+.cache
+.tools
+node_modules
+manual-upload
+test-artifacts
+tests
+.clasp.json
+deployment.json
+setup-and-deploy.command
+entropy-results-dashboard-manual.zip
+.env*

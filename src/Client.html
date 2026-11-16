@@ -1,0 +1,499 @@
+<script>
+'use strict';
+(function () {
+  const $ = function (id) { return document.getElementById(id); };
+  const filterKeys = ['dataset', 'model', 'analysis', 'bitrate', 'gop', 'className'];
+  const state = { catalog: null, status: null, view: 'gallery', group: '', savedOnly: false,
+    runId: '', query: '', sort: 'newest', filters: {}, limit: 48, selected: new Set(),
+    saved: new Set(), scanning: false, modalToken: 0, matches: [] };
+  const previewCache = new Map();
+  const previewQueue = [];
+  let previewActive = 0;
+  let observer = null;
+  let toastTimer;
+  let currentRecord = null;
+  let loadToken = 0;
+  try { state.saved = new Set(JSON.parse(localStorage.getItem('entropy-saved-figures') || '[]')); } catch (_) {}
+
+  function element(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function button(text, className, fn) {
+    const node = element('button', className, text);
+    node.type = 'button'; node.addEventListener('click', fn); return node;
+  }
+  function link(text, url, className) {
+    const node = element('a', className, text);
+    node.href = url; node.target = '_blank'; node.rel = 'noopener noreferrer'; return node;
+  }
+  function driveUrl(id, folder) {
+    return 'https://drive.google.com/' + (folder ? 'drive/folders/' : 'file/d/') + encodeURIComponent(id) + (folder ? '' : '/view');
+  }
+  function rpc(name) {
+    const args = Array.prototype.slice.call(arguments, 1);
+    if (window.entropyTransport) return window.entropyTransport.rpc(name, args);
+    return new Promise(function (resolve, reject) {
+      if (!window.google || !google.script || !google.script.run) {
+        reject(new Error('Open the deployed Apps Script URL to connect to your Drive.')); return;
+      }
+      const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (error) {
+        reject(new Error(error && error.message ? error.message : String(error || 'Request failed.')));
+      });
+      runner[name].apply(runner, args);
+    });
+  }
+  function showError(error) {
+    $('errorText').textContent = error && error.message ? error.message : String(error);
+    $('error').hidden = false;
+  }
+  function toast(message) {
+    clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false;
+    toastTimer = setTimeout(function () { $('toast').hidden = true; }, 4000);
+  }
+  function dateLabel(value, detailed) {
+    const d = new Date(value || '');
+    if (!Number.isFinite(d.getTime())) return '—';
+    return detailed ? d.toLocaleString() : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function bytes(value) {
+    if (!Number.isFinite(Number(value))) return '—';
+    if (value < 1000) return value + ' B';
+    if (value < 1000000) return (value / 1000).toFixed(1) + ' KB';
+    if (value < 1000000000) return (value / 1000000).toFixed(1) + ' MB';
+    return (value / 1000000000).toFixed(2) + ' GB';
+  }
+  function metricValue(metric) {
+    return /accuracy|f1/i.test(metric.label) ? (metric.value * 100).toFixed(2) + '%' : metric.value.toFixed(4);
+  }
+  function prettyName(name) { return String(name || '').replace(/\.[^.]+$/, '').replace(/_/g, ' '); }
+  function tag(text, special) { return element('span', special ? 'tag dataset' : 'tag', text); }
+  function makeTags(record) {
+    const tags = element('div', 'tags');
+    [record.model, record.bitrate, record.gop ? 'GOP ' + record.gop : '', record.className || record.kind]
+      .filter(Boolean).forEach(function (text) { tags.append(tag(text)); });
+    return tags;
+  }
+  function remember() {
+    const params = { view: state.view };
+    if (state.query) params.q = state.query;
+    if (state.group) params.group = state.group;
+    if (state.runId) params.run = state.runId;
+    if (state.savedOnly) params.saved = '1';
+    filterKeys.forEach(function (key) { if (state.filters[key]) params[key] = state.filters[key]; });
+    try {
+      if (window.google && google.script && google.script.history) google.script.history.replace({}, params, '');
+      else history.replaceState({}, '', '?' + new URLSearchParams(params).toString());
+    } catch (_) {}
+  }
+  function restore(params) {
+    params = params || {};
+    state.view = ['gallery', 'runs', 'files'].includes(params.view) ? params.view : 'gallery';
+    state.query = String(params.q || ''); state.group = String(params.group || '');
+    state.runId = String(params.run || ''); state.savedOnly = params.saved === '1';
+    filterKeys.forEach(function (key) { state.filters[key] = String(params[key] || ''); });
+    $('search').value = state.query;
+  }
+  function saveFavorite(id) {
+    if (state.saved.has(id)) state.saved.delete(id); else state.saved.add(id);
+    try { localStorage.setItem('entropy-saved-figures', JSON.stringify(Array.from(state.saved))); } catch (_) {}
+    render();
+  }
+
+  async function load() {
+    const token = ++loadToken;
+    $('error').hidden = true;
+    try {
+      const response = await rpc('getCatalog');
+      if (token !== loadToken) return;
+      if (!response || !response.catalog || !Array.isArray(response.catalog.records)) throw new Error('The catalog response was incomplete. Please try again.');
+      state.catalog = response.catalog; state.status = response.status;
+      hydrateFilters(); render(); updateStatus();
+    } catch (error) {
+      if (token !== loadToken) return;
+      $('indexedAt').textContent = 'Connection needs attention';
+      $('resultCount').textContent = 'Could not load results';
+      showError(error);
+    }
+  }
+
+  function hydrateFilters() {
+    filterKeys.forEach(function (key) {
+      const values = Array.from(new Set(state.catalog.records.map(function (r) { return r[key]; }).filter(Boolean)))
+        .sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+      const select = $(key);
+      const first = select.options[0].textContent;
+      select.replaceChildren(element('option', '', first)); select.options[0].value = '';
+      values.forEach(function (value) { const opt = element('option', '', value); opt.value = value; select.append(opt); });
+      if (state.filters[key] && !values.includes(state.filters[key])) {
+        const opt = element('option', '', state.filters[key]); opt.value = state.filters[key]; select.append(opt);
+      }
+      select.value = state.filters[key] || '';
+    });
+  }
+
+  function updateStatus() {
+    const s = state.status || {};
+    const c = state.catalog;
+    $('refresh').disabled = state.scanning;
+    $('refresh').textContent = state.scanning ? 'Indexing…' : s.active ? 'Resume index ↻' : 'Refresh index ↻';
+    $('indexedAt').textContent = c && c.indexedAt ? 'Indexed ' + dateLabel(c.indexedAt, true) : 'First index pending';
+    $('scheduleLabel').textContent = s.scheduled ? (window.entropyTransport ? 'Refresh every 6 hours while open' : 'Automatic refresh every 6 hours') : 'Private research workspace';
+    if (window.entropyTransport) $('enableSchedule').textContent = 'Enable refresh while open';
+    $('enableSchedule').hidden = !!s.scheduled || state.scanning;
+    const notice = $('notice'); notice.replaceChildren(); notice.hidden = true;
+    if (s.active || state.scanning) {
+      notice.hidden = false;
+      notice.append(element('span', '', 'Indexing Figures · ' + (s.scannedFolders || 0) + ' folders scanned · ' + (s.files || 0) + ' files found · ' + (s.pendingFolders || 0) + ' folders queued. ' +
+        (c && c.complete ? 'Showing the last completed catalog.' : 'Results appear as the scan progresses.')));
+      if (!state.scanning) notice.append(button('Resume index', 'button', function () { scan(false); }));
+    }
+    const warnings = c && c.warnings || [];
+    if (warnings.length) {
+      notice.hidden = false;
+      const details = element('details');
+      details.append(element('summary', '', warnings.length + ' metadata files need attention. Original files remain available.'));
+      details.append(element('pre', '', warnings.map(function (w) { return w.path + ': ' + w.message; }).join('\n')));
+      notice.append(details);
+    }
+  }
+
+  async function scan(schedule) {
+    if (state.scanning) return;
+    state.scanning = true; $('error').hidden = true; updateStatus();
+    try {
+      state.status = await rpc(schedule ? 'setup' : 'startIndex');
+      updateStatus();
+      let batches = 0;
+      while (state.status.active) {
+        state.status = await rpc('continueIndex');
+        updateStatus(); batches++;
+        if (batches % 2 === 0 || !state.status.active) await load();
+      }
+      await load(); toast('Results catalog is up to date.');
+    } catch (error) { showError(error); }
+    finally { state.scanning = false; updateStatus(); }
+  }
+
+  function matches(record) {
+    if (state.group && record.groupId !== state.group) return false;
+    if (state.runId && (record.runId || record.id) !== state.runId) return false;
+    if (filterKeys.some(function (key) { return state.filters[key] && record[key] !== state.filters[key]; })) return false;
+    const text = [record.name, record.path, record.groupName, record.runName, record.dataset, record.model,
+      record.analysis, record.bitrate, record.gop, record.className, record.modality, record.kind].join(' ').toLowerCase();
+    return state.query.toLowerCase().trim().split(/\s+/).filter(Boolean).every(function (word) { return text.includes(word); });
+  }
+  function sorted(records) {
+    return records.sort(function (a, b) {
+      if (state.sort === 'name') return a.name.localeCompare(b.name, undefined, { numeric: true });
+      if (state.sort === 'path') return (a.path || '').localeCompare(b.path || '', undefined, { numeric: true });
+      return (b.modifiedTime || '').localeCompare(a.modifiedTime || '') || a.name.localeCompare(b.name);
+    });
+  }
+  function selectCollection(id, saved) {
+    state.group = id; state.savedOnly = !!saved; state.runId = ''; state.limit = 48;
+    if (saved) state.view = 'gallery';
+    document.body.classList.remove('sidebar-open'); $('browseToggle').setAttribute('aria-expanded', 'false');
+    render(); remember();
+  }
+
+  function render() {
+    if (!state.catalog) return;
+    if (observer) observer.disconnect();
+    const c = state.catalog;
+    const group = c.groups.find(function (g) { return g.id === state.group; });
+    $('pageTitle').textContent = state.savedOnly ? 'Saved figures' : group ? group.name : 'All results';
+    $('pageSubtitle').textContent = state.savedOnly ? 'Your saved figures, ready to revisit and compare.' :
+      group ? 'Explore figures, metrics, and source files in this collection.' : 'Find a figure. Inspect an experiment. Compare what changed.';
+    const inGroup = c.records.filter(function (r) { return !state.group || r.groupId === state.group; });
+    $('statFigures').textContent = inGroup.filter(function (r) { return /^(image|pdf)$/.test(r.fileKind); }).length.toLocaleString();
+    $('statRuns').textContent = c.runs.filter(function (r) { return !state.group || r.groupId === state.group; }).length.toLocaleString();
+    $('statGroups').textContent = (state.group ? group ? 1 : 0 : c.groups.length).toLocaleString();
+    $('statFiles').textContent = inGroup.length.toLocaleString();
+    $('allCount').textContent = c.records.filter(function (r) { return /^(image|pdf)$/.test(r.fileKind); }).length;
+    $('savedCount').textContent = c.records.filter(function (r) { return state.saved.has(r.id); }).length;
+    $('groupCount').textContent = c.groups.length;
+    $('allResults').classList.toggle('active', !state.group && !state.savedOnly);
+    $('savedResults').classList.toggle('active', state.savedOnly);
+    $('groups').replaceChildren();
+    c.groups.forEach(function (g) {
+      const b = button('', 'nav-item group-item' + (state.group === g.id ? ' active' : ''), function () { selectCollection(g.id, false); });
+      b.append(element('span', '', g.name), element('span', 'nav-count', g.figures || 0)); $('groups').append(b);
+    });
+    if (!c.groups.length) $('groups').append(element('p', 'muted nav-placeholder', 'Collections appear after indexing.'));
+    document.querySelectorAll('[data-view]').forEach(function (b) {
+      const active = b.dataset.view === state.view;
+      b.classList.toggle('active', active); b.setAttribute('aria-selected', String(active)); b.tabIndex = active ? 0 : -1;
+    });
+    const run = c.runs.find(function (r) { return r.id === state.runId; });
+    $('runFilter').hidden = !state.runId;
+    $('runFilter').textContent = (run ? run.name : 'Selected experiment') + ' ×';
+    $('runFilter').title = 'Clear the experiment filter';
+    let records = state.view === 'runs' ? c.runs.filter(matches) : c.records.filter(matches);
+    if (state.view === 'gallery') records = records.filter(function (r) { return /^(image|pdf)$/.test(r.fileKind); });
+    if (state.savedOnly) records = records.filter(function (r) { return state.saved.has(r.id); });
+    state.matches = sorted(records);
+    const noun = state.view === 'runs' ? 'experiments' : state.view === 'files' ? 'files' : 'figures';
+    $('resultCount').textContent = records.length.toLocaleString() + ' ' + noun + (!c.complete ? ' · index incomplete' : '');
+    $('results').replaceChildren(); $('results').className = 'results';
+    const shown = state.matches.slice(0, state.limit);
+    if (!shown.length) renderEmpty();
+    else if (state.view === 'gallery') renderGallery(shown);
+    else renderTable(shown, state.view);
+    $('loadMore').hidden = records.length <= state.limit;
+    $('loadMore').textContent = 'Show more (' + Math.max(0, records.length - state.limit).toLocaleString() + ' remaining)';
+    updateTray();
+  }
+
+  function renderEmpty() {
+    const box = element('div', 'empty'); box.append(element('span', 'empty-symbol', '▧'));
+    const first = !state.catalog.complete && !state.catalog.records.length;
+    box.append(element('h3', '', first ? 'Your results, one view away' : 'No matching results'));
+    box.append(element('p', '', first ? 'Build a catalog of the Figures folder to browse plots, inspect experiment metadata, and compare results.' :
+      state.savedOnly ? 'Save a figure using its star, or adjust your filters to find saved results.' : 'Try fewer filters or a different search. You can also refresh the index to pick up new results.'));
+    box.append(button(first ? 'Start indexing Figures' : 'Clear filters', 'button primary', first ? function () { scan(false); } : clearFilters));
+    $('results').append(box);
+  }
+
+  function renderGallery(records) {
+    const grid = element('div', 'gallery');
+    observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        loadImage(entry.target, entry.target.dataset.fileId, false);
+      });
+    }, { rootMargin: '200px' });
+    records.forEach(function (r) {
+      const card = element('article', 'figure-card' + (state.selected.has(r.id) ? ' selected' : ''));
+      const image = element('div', 'figure-image');
+      const select = element('label', 'select-figure');
+      const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selected.has(r.id);
+      checkbox.setAttribute('aria-label', 'Select ' + r.name + ' from ' + r.runName + ' for comparison');
+      checkbox.addEventListener('change', function () {
+        if (checkbox.checked && state.selected.size >= 4) { checkbox.checked = false; toast('Select up to four figures at a time.'); return; }
+        if (checkbox.checked) state.selected.add(r.id); else state.selected.delete(r.id);
+        card.classList.toggle('selected', checkbox.checked); updateTray();
+      });
+      select.append(checkbox); image.append(select);
+      const favorite = button(state.saved.has(r.id) ? '★' : '☆', 'icon-button save-figure' + (state.saved.has(r.id) ? ' saved' : ''), function () { saveFavorite(r.id); });
+      favorite.setAttribute('aria-label', (state.saved.has(r.id) ? 'Unsave ' : 'Save ') + r.name);
+      favorite.setAttribute('aria-pressed', String(state.saved.has(r.id))); image.append(favorite);
+      const open = button('', 'open-figure', function () { openFile(r); });
+      open.setAttribute('aria-label', 'View ' + r.name + ' from ' + r.runName);
+      const holder = element('div', 'image-placeholder'); holder.dataset.fileId = r.id;
+      holder.append(element('span', '', '▧'), element('span', '', 'Loading preview')); open.append(holder); image.append(open);
+      const info = element('div', 'figure-info');
+      const heading = element('div', 'figure-heading'); heading.append(tag(r.dataset, true), element('span', 'figure-date', dateLabel(r.modifiedTime)));
+      const title = element('h3'); title.append(button(prettyName(r.name), '', function () { openFile(r); }));
+      const path = element('div', 'figure-path', r.runName + (r.className ? ' / ' + r.className : '') + ' · ' + r.analysis); path.title = r.path;
+      info.append(heading, title, path, makeTags(r)); card.append(image, info); grid.append(card); observer.observe(holder);
+    });
+    $('results').append(grid);
+  }
+
+  function renderTable(records, view) {
+    const wrap = element('div', 'table-wrap'); const table = element('table');
+    const head = element('thead'); const row = element('tr');
+    (view === 'runs' ? ['Experiment', 'Dataset / Model', 'Settings', 'Figures', 'Metrics', 'Updated'] : ['File', 'Collection', 'Type', 'Size', 'Updated'])
+      .forEach(function (name) { const th = element('th', '', name); th.scope = 'col'; row.append(th); });
+    head.append(row); table.append(head); const body = element('tbody');
+    records.forEach(function (r) {
+      const tr = element('tr'); const first = element('td');
+      first.append(button(r.name, 'text-button', function () { view === 'runs' ? openRun(r) : openFile(r); }), element('small', '', r.path)); tr.append(first);
+      if (view === 'runs') {
+        const context = element('td'); context.append(tag(r.dataset, true), element('small', '', r.model)); tr.append(context);
+        const settings = element('td', '', [r.bitrate, r.gop ? 'GOP ' + r.gop : ''].filter(Boolean).join(' · ') || '—');
+        if (r.state) settings.append(element('small', '', r.state.replace(/_/g, ' '))); tr.append(settings);
+        const figures = element('td'); figures.append(button(String(r.figures), 'text-button', function () { showRunFigures(r); })); tr.append(figures);
+        const metrics = element('td');
+        metrics.append(r.metrics.length ? button('Inspect ' + r.metrics.length + ' metrics', 'text-button', function () { openRun(r); }) : element('span', 'muted', 'Not reported'));
+        tr.append(metrics);
+      } else {
+        tr.append(element('td', '', r.groupName), element('td', '', r.fileKind.toUpperCase()), element('td', '', bytes(r.size)));
+      }
+      tr.append(element('td', '', dateLabel(r.modifiedTime))); body.append(tr);
+    });
+    table.append(body); wrap.append(table); $('results').append(wrap);
+  }
+
+  function preview(id, original) {
+    const key = id + ':' + !!original;
+    if (!previewCache.has(key)) {
+      const promise = new Promise(function (resolve, reject) { previewQueue.push({ id: id, original: original, resolve: resolve, reject: reject }); pumpPreviews(); });
+      previewCache.set(key, promise);
+      if (previewCache.size > 80) previewCache.delete(previewCache.keys().next().value);
+      promise.catch(function () { previewCache.delete(key); });
+    }
+    return previewCache.get(key);
+  }
+  function pumpPreviews() {
+    while (previewActive < 3 && previewQueue.length) {
+      const item = previewQueue.shift(); previewActive++;
+      rpc('getPreview', item.id, item.original).then(item.resolve, item.reject).finally(function () { previewActive--; pumpPreviews(); });
+    }
+  }
+  async function loadImage(holder, id, original, token) {
+    try {
+      const response = await preview(id, original);
+      if (!holder.isConnected || (token !== undefined && token !== state.modalToken)) return;
+      holder.replaceChildren();
+      if (response.dataUrl && /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i.test(response.dataUrl)) {
+        const image = element('img'); image.alt = state.catalog.records.find(function (r) { return r.id === id; })?.name || 'Result figure';
+        image.addEventListener('error', function () { holder.replaceChildren(element('span', 'preview-note', 'Preview could not be displayed. Open the original in Drive.')); });
+        image.src = response.dataUrl; holder.append(image);
+      } else holder.append(element('span', 'preview-note', response.note || 'Preview unavailable. Open the original in Drive.'));
+      if (response.note && response.dataUrl && original) holder.append(element('p', 'preview-note', response.note));
+    } catch (_) {
+      if (!holder.isConnected || (token !== undefined && token !== state.modalToken)) return;
+      holder.replaceChildren(element('span', 'preview-note', 'Preview unavailable. Open the original in Drive.'));
+    }
+  }
+  function updateTray() {
+    $('compareTray').hidden = state.selected.size === 0;
+    $('selectedCount').textContent = state.selected.size + ' figure' + (state.selected.size === 1 ? '' : 's') + ' selected';
+    $('compare').disabled = state.selected.size < 2;
+  }
+
+  function openDialog(title, eyebrow) {
+    state.modalToken++; $('viewerTitle').textContent = title; $('viewerEyebrow').textContent = eyebrow;
+    $('viewerBody').replaceChildren(); if (!$('viewer').open) $('viewer').showModal(); return state.modalToken;
+  }
+  function closeDialog() { state.modalToken++; currentRecord = null; $('viewer').close(); }
+  function addDescription(list, label, value) {
+    if (value === undefined || value === null || value === '') return;
+    list.append(element('dt', '', label), element('dd', '', value));
+  }
+  async function openFile(record) {
+    currentRecord = record;
+    const token = openDialog(prettyName(record.name), record.fileKind === 'image' ? 'FIGURE DETAIL' : 'FILE DETAIL');
+    const layout = element('div', 'detail-layout'); const content = element('div', 'detail-preview');
+    const info = element('aside', 'detail-info'); info.append(element('h3', '', 'Experiment context'));
+    const dl = element('dl');
+    [['Dataset', record.dataset], ['Model', record.model], ['Analysis', record.analysis], ['Experiment', record.runName],
+      ['Class', record.className], ['Bitrate', record.bitrate], ['GOP', record.gop], ['State', record.state],
+      ['Updated', dateLabel(record.modifiedTime, true)], ['File size', bytes(record.size)], ['Path', record.path]]
+      .forEach(function (pair) { addDescription(dl, pair[0], pair[1]); });
+    info.append(dl, link('Open original in Drive ↗', driveUrl(record.id), 'button primary'), link('Open experiment folder ↗', driveUrl(record.parentId, true), 'button'));
+    const related = (record.relatedIds || []).map(function (id) { return state.catalog.records.find(function (r) { return r.id === id; }); }).filter(Boolean);
+    if (related.length) {
+      info.append(element('h3', '', 'Metadata & source files'));
+      related.forEach(function (r) { if (r.id !== record.id) info.append(button(r.name, 'related-file', function () { openFile(r); })); });
+    }
+    const facts = (record.summaries || []).find(function (s) { return s.summary.facts.length; });
+    if (facts) {
+      info.append(element('h3', '', facts.name)); const factList = element('dl');
+      facts.summary.facts.slice(0, 12).forEach(function (f) { addDescription(factList, f.label, f.value); }); info.append(factList);
+    }
+    layout.append(content, info); $('viewerBody').append(layout);
+    if (/^(image|pdf)$/.test(record.fileKind)) {
+      const navigation = element('div', 'detail-nav');
+      navigation.append(button('← Previous', 'button', function () { navigateFigure(-1); }), element('span', '', 'Use ← → to browse'), button('Next →', 'button', function () { navigateFigure(1); }));
+      content.append(navigation);
+      const holder = element('div', 'detail-preview'); holder.style.padding = '0'; holder.append(element('p', 'preview-note', 'Loading figure…')); content.append(holder);
+      loadImage(holder, record.id, true, token);
+      return;
+    }
+    content.append(element('p', 'preview-note', 'Loading file…'));
+    try {
+      const detail = await rpc('getFileDetail', record.id);
+      if (token !== state.modalToken || !content.isConnected) return;
+      content.replaceChildren();
+      if (detail.note) content.append(element('p', 'preview-note', detail.note));
+      if (detail.table) {
+        const wrap = element('div', 'table-wrap'); const table = element('table');
+        detail.table.rows.forEach(function (row, i) {
+          const tr = element('tr'); row.forEach(function (value) { tr.append(element(i ? 'td' : 'th', '', value)); }); table.append(tr);
+        }); wrap.append(table); content.append(wrap);
+        content.append(element('p', 'preview-note', detail.table.totalRows + ' data rows' + (detail.table.truncated ? ' · showing the first 100 rows and up to 30 columns' : '')));
+      } else if (detail.text) content.append(element('pre', '', detail.text));
+      else if (!detail.note) content.append(element('p', 'preview-note', 'Open this file in Drive to view or download it.'));
+    } catch (error) {
+      if (token === state.modalToken) content.replaceChildren(element('p', 'preview-note', error.message));
+    }
+  }
+
+  function navigateFigure(delta) {
+    if (!currentRecord) return;
+    const figures = state.matches.filter(function (r) { return /^(image|pdf)$/.test(r.fileKind); });
+    const i = figures.findIndex(function (r) { return r.id === currentRecord.id; });
+    if (i < 0 || !figures.length) return;
+    openFile(figures[(i + delta + figures.length) % figures.length]);
+  }
+
+  function showRunFigures(run) {
+    state.runId = run.id; state.view = 'gallery'; state.limit = 48; state.savedOnly = false;
+    if ($('viewer').open) closeDialog(); render(); remember();
+  }
+  function openRun(run) {
+    currentRecord = null; openDialog(run.name, 'EXPERIMENT DETAIL');
+    const content = element('div', 'run-detail'); content.append(element('p', '', run.path), makeTags(run));
+    const actions = element('p'); actions.append(button('Browse ' + run.figures + ' figures', 'button primary', function () { showRunFigures(run); }), document.createTextNode(' '), link('Open experiment folder ↗', driveUrl(run.id, true), 'button')); content.append(actions);
+    content.append(element('h3', '', 'Reported metrics'));
+    if (!run.metrics.length) content.append(element('p', '', 'No recognized summary metrics were found. Inspect the experiment’s source files for further details.'));
+    else {
+      const wrap = element('div', 'table-wrap'); const table = element('table'); const head = element('tr');
+      ['Metric', 'Value', 'Split / evaluation', 'Block', 'Source'].forEach(function (x) { const th = element('th', '', x); th.scope = 'col'; head.append(th); });
+      const thead = element('thead'); thead.append(head); table.append(thead); const body = element('tbody');
+      run.metrics.forEach(function (metric) {
+        const tr = element('tr'); tr.append(element('td', '', metric.label), element('td', '', metricValue(metric)), element('td', '', metric.split), element('td', '', metric.block || '—'));
+        const source = element('td'); source.append(link(metric.sourcePath, driveUrl(metric.sourceId))); tr.append(source); body.append(tr);
+      }); table.append(body); wrap.append(table); content.append(wrap);
+    }
+    $('viewerBody').append(content);
+  }
+
+  function compare() {
+    const records = Array.from(state.selected).map(function (id) { return state.catalog.records.find(function (r) { return r.id === id; }); }).filter(Boolean);
+    if (records.length < 2) { toast('Select at least two figures to compare.'); return; }
+    currentRecord = null; const token = openDialog('Compare figures', 'SIDE BY SIDE');
+    const note = element('p', 'preview-note', 'Original figures retain their own axes and color scales. Experiment settings are shown with each result.'); note.style.margin = '18px auto'; $('viewerBody').append(note);
+    const grid = element('div', 'compare-grid'); $('viewerBody').append(grid);
+    records.forEach(function (r) {
+      const cell = element('section', 'compare-cell'); cell.append(element('h3', '', prettyName(r.name)), element('p', '', r.path), makeTags(r));
+      const holder = element('div', 'compare-image'); holder.append(element('p', 'preview-note', 'Loading figure…')); cell.append(holder, link('Open original ↗', driveUrl(r.id), 'text-button')); grid.append(cell);
+      loadImage(holder, r.id, true, token);
+    });
+  }
+
+  function clearFilters() {
+    state.query = ''; state.filters = {}; state.runId = ''; state.limit = 48; $('search').value = '';
+    filterKeys.forEach(function (key) { $(key).value = ''; }); render(); remember();
+  }
+  $('allResults').addEventListener('click', function () { selectCollection('', false); });
+  $('savedResults').addEventListener('click', function () { selectCollection('', true); });
+  $('refresh').addEventListener('click', function () { scan(false); });
+  $('enableSchedule').addEventListener('click', function () { scan(true); });
+  $('retry').addEventListener('click', function () { state.status && state.status.active ? scan(false) : load(); });
+  $('clearFilters').addEventListener('click', clearFilters);
+  $('search').addEventListener('input', function () { state.query = $('search').value; state.limit = 48; render(); remember(); });
+  filterKeys.forEach(function (key) { $(key).addEventListener('change', function () { state.filters[key] = $(key).value; state.limit = 48; render(); remember(); }); });
+  $('sort').addEventListener('change', function () { state.sort = $('sort').value; render(); });
+  $('runFilter').addEventListener('click', function () { state.runId = ''; render(); remember(); });
+  $('loadMore').addEventListener('click', function () { state.limit += 48; render(); });
+  $('compare').addEventListener('click', compare);
+  $('clearSelection').addEventListener('click', function () { state.selected.clear(); render(); });
+  $('closeViewer').addEventListener('click', closeDialog);
+  $('viewer').addEventListener('cancel', function () { state.modalToken++; currentRecord = null; });
+  $('viewer').addEventListener('click', function (event) { if (event.target === $('viewer')) { const r = $('viewer').getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) closeDialog(); } });
+  $('browseToggle').addEventListener('click', function () { const open = document.body.classList.toggle('sidebar-open'); $('browseToggle').setAttribute('aria-expanded', String(open)); });
+  document.querySelectorAll('[data-view]').forEach(function (b) {
+    b.addEventListener('click', function () { state.view = b.dataset.view; state.savedOnly = false; state.limit = 48; render(); remember(); });
+    b.addEventListener('keydown', function (event) {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); const tabs = Array.from(document.querySelectorAll('[data-view]')); const i = tabs.indexOf(b);
+      const next = tabs[event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next.click(); next.focus();
+    });
+  });
+  document.addEventListener('keydown', function (event) {
+    const editing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (event.key === '/' && !editing && !$('viewer').open) { event.preventDefault(); $('search').focus(); }
+    if (!editing && $('viewer').open && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); navigateFigure(event.key === 'ArrowRight' ? 1 : -1); }
+    if (event.key === 'Escape') { document.body.classList.remove('sidebar-open'); $('browseToggle').setAttribute('aria-expanded', 'false'); }
+  });
+  if (window.google && google.script && google.script.url) google.script.url.getLocation(function (location) { restore(location.parameter); load(); });
+  else { restore(Object.fromEntries(new URLSearchParams(location.search))); load(); }
+}());
+</script>

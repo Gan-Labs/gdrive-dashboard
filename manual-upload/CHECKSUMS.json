@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "files": {
+    "Code.gs": "7d676a289d3da4888481b692e26c94b5dd11e4922ee3aa5853eed1ae1132c199",
+    "appsscript.json": "fb3a64a06ba8242fe987310ed5eaa2d0a02fba32a4d2b564ad62c54c0248b57c",
+    "START-HERE.html": "194f08e31501e9e7053a5d00d495298311e5fc738ab7eb9d8a14d6f7296d6602",
+    "README.md": "3671db23d2bdeea4d9dc4d8d7337babe9bf31c8baacb84b7c5e2b096c4701a24"
+  },
+  "sourceFiles": {
+    "Client.html": "725c7aa07433b11e1e67410f41e3b918222c84028bb9d450213e7b58374baf77",
+    "Core.gs": "bd38ac0ae4814a4150089d25971a18086d38f39aa19945474a4018550b2bd571",
+    "Index.html": "951db521d728cfb3719d6f127a3d8830a1bd410fa0ddc22f1c16463ce9f477ee",
+    "Server.gs": "69593528f7c6921281bde85ab4f754c259ab2a32bd97372b962bf7cc042895bc",
+    "Styles.html": "f4729353dec921546c56f0b91d1b66720f288f4df02cad94dc3404e3848379b2",
+    "appsscript.json": "fb3a64a06ba8242fe987310ed5eaa2d0a02fba32a4d2b564ad62c54c0248b57c"
+  }
+}

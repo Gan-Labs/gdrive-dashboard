@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <?!= include_('Styles'); ?>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to results</a>
+  <aside class="sidebar" aria-label="Result collections">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">∑</span><div>ENTROPY<span>RESEARCH RESULTS</span></div></div>
+    <p class="nav-label">WORKSPACE</p>
+    <button class="nav-item active" id="allResults"><span>All results</span><span class="nav-count" id="allCount">—</span></button>
+    <button class="nav-item" id="savedResults"><span>Saved figures</span><span class="nav-count" id="savedCount">0</span></button>
+    <div class="nav-heading"><p class="nav-label">COLLECTIONS</p><span id="groupCount"></span></div>
+    <nav id="groups" aria-label="Experiment groups"><p class="muted nav-placeholder">Loading collections…</p></nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span><div>Google Drive<span id="scheduleLabel">Private research workspace</span></div><a href="https://drive.google.com/drive/folders/1qXAMcNrZuqk4wlGbqZlmHydQ-cSthbIV" target="_blank" rel="noopener noreferrer" aria-label="Open Figures in Drive">↗</a></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumbs"><button id="browseToggle" class="button subtle mobile-only" aria-expanded="false">Collections</button><span>Research</span><span aria-hidden="true">/</span><strong>Results explorer</strong></div><div class="top-actions"><span class="private-label">PRIVATE</span><a class="button subtle" href="https://drive.google.com/drive/folders/1qXAMcNrZuqk4wlGbqZlmHydQ-cSthbIV" target="_blank" rel="noopener noreferrer">Open Drive ↗</a></div></header>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><div><p class="eyebrow">THE EXPERIMENT LIBRARY</p><h1 id="pageTitle">All results</h1><p class="subtitle" id="pageSubtitle">Find a figure. Inspect an experiment. Compare what changed.</p></div><div class="refresh-area"><button id="refresh" class="button primary">Refresh index <span aria-hidden="true">↻</span></button><span id="indexedAt" class="muted">Connecting to Drive…</span></div></div>
+      <section id="notice" class="notice" role="status" hidden></section>
+      <section id="error" class="error" role="alert" hidden><span id="errorText"></span><button id="retry" class="button">Try again</button></section>
+      <section class="statistics" aria-label="Catalog overview"><div><span>Figures</span><strong id="statFigures">—</strong></div><div><span>Experiments</span><strong id="statRuns">—</strong></div><div><span>Collections</span><strong id="statGroups">—</strong></div><div><span>Indexed files</span><strong id="statFiles">—</strong></div></section>
+      <section class="explorer" aria-label="Search and browse results">
+        <div class="explorer-toolbar"><div class="tabs" role="tablist" aria-label="Result view"><button role="tab" aria-selected="true" class="tab active" data-view="gallery">Figures</button><button role="tab" aria-selected="false" class="tab" data-view="runs">Experiments</button><button role="tab" aria-selected="false" class="tab" data-view="files">All files</button></div><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search figures, experiments, classes…" aria-label="Search results"><kbd>/</kbd></label></div>
+        <div class="filters"><label>Dataset<select id="dataset"><option value="">All datasets</option></select></label><label>Model<select id="model"><option value="">All models</option></select></label><label>Analysis<select id="analysis"><option value="">All analyses</option></select></label><label>Bitrate<select id="bitrate"><option value="">Any bitrate</option></select></label><label>GOP<select id="gop"><option value="">Any GOP</option></select></label><label>Class<select id="className"><option value="">All classes</option></select></label><button id="clearFilters" class="text-button">Clear filters</button></div>
+        <div class="results-heading"><div><strong id="resultCount" aria-live="polite">Loading results…</strong><button id="runFilter" class="filter-chip" hidden></button></div><label class="sort-label">Sort<select id="sort" aria-label="Sort results"><option value="newest">Recently updated</option><option value="name">Name A–Z</option><option value="path">Experiment path</option></select></label></div>
+        <div id="results" class="results" role="tabpanel" aria-label="Results"></div>
+        <div class="load-more"><button id="loadMore" class="button" hidden>Show more results</button></div>
+      </section>
+      <footer><span id="footerStatus">Original files and experiment data stay in Google Drive.</span><button id="enableSchedule" class="text-button" hidden>Enable automatic refresh</button></footer>
+    </main>
+  </div>
+  <div id="compareTray" class="compare-tray" hidden><div><strong id="selectedCount"></strong><span>Choose up to four figures</span></div><button id="clearSelection" class="button subtle">Clear</button><button id="compare" class="button primary">Compare figures →</button></div>
+  <dialog id="viewer" aria-labelledby="viewerTitle"><div class="dialog-header"><div><p class="eyebrow" id="viewerEyebrow">FIGURE DETAIL</p><h2 id="viewerTitle"></h2></div><button class="icon-button" id="closeViewer" aria-label="Close viewer">×</button></div><div id="viewerBody"></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <?!= include_('Client'); ?>
+</body>
+</html>

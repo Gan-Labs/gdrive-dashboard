@@ -1,0 +1,12 @@
+node_modules/
+public/
+.vercel/
+.env
+.env.*
+!.env.example
+.cache/
+.tools/
+.clasp.json
+deployment.json
+test-artifacts/
+*.log
