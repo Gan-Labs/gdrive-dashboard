@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require('playwright-core');
 const { createSharedDashboard } = require('../lib/shared.cjs');
 const { ROOT, PNG } = require('../tests/harness.cjs');
-const root = path.resolve(__dirname, '..'), PASSWORD = 'shared-browser-fixture-password';
+const root = path.resolve(__dirname, '..'), PASSWORD = 'demo';
 async function main() {
   const disk = new Map(), queue = []; let etag = 0, working = false, listCalls = 0, originalCalls = 0;
   const store = { async read(key) { return disk.has(key) ? structuredClone(disk.get(key)) : null; },

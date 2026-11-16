@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { createSharedDashboard } = require('../lib/shared.cjs');
 const { privateStore } = require('../lib/private-store.cjs');
 const { PNG } = require('./harness.cjs');
-const ROOT = 'shared-figures', PASSWORD = 'fixture-secret-password-12345', FOLDER = 'application/vnd.google-apps.folder';
+const ROOT = 'shared-figures', PASSWORD = 'demo', FOLDER = 'application/vnd.google-apps.folder';
 function memoryStore() {
   const disk = new Map(); let n = 0;
   return { disk, read: async key => disk.has(key) ? structuredClone(disk.get(key)) : null,

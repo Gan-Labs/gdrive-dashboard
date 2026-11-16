@@ -29,7 +29,7 @@ In **Project → Settings → Environment Variables**, use **Production** initia
 | Key | Value |
 | --- | --- |
 | `DASHBOARD_MODE` | `shared` |
-| `DASHBOARD_PASSWORD` | A strong, password-manager-generated password, at least 16 characters. Share this password with your collaborators. |
+| `DASHBOARD_PASSWORD` | Your shared dashboard password. Any nonempty password is accepted; there is no minimum length. Share it with your collaborators. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | The complete contents of the downloaded JSON key file, including its braces. Paste it directly into the Vercel value field. |
 | `BLOB_READ_WRITE_TOKEN` | Supplied by the connected **private** Blob store. |
 | `GOOGLE_DRIVE_ROOT_ID` | Optional; the existing Figures ID is already the default. |
