@@ -6,6 +6,8 @@ The recovered local project was a Google Apps Script app, rather than a Firebase
 
 **For collaborators: use [shared backend mode](SHARED-SETUP.md).** It connects Drive once on the server, saves a common catalog and thumbnails in private Vercel Blob storage, and rebuilds through Vercel Queues. Viewers enter a shared dashboard password and do not connect Google Drive. A refresh loads the existing catalog; re-indexing is an explicit background job. Shared mode adds server credentials and durable storage; the personal OAuth setup below remains available by default until `DASHBOARD_MODE=shared` is configured.
 
+Shared mode also includes **[saved research boards](SHARED-SETUP.md#saved-research-boards)**: pin figures, charts, CSV tables and experiment metrics onto a canvas, add notes, drag/resize tiles, and save a named layout that collaborators can reopen through a board link. Boards use the same private backend storage, with revision checks to protect concurrent edits.
+
 ## Deploy on Vercel
 
 1. Upload/push **this project directory**, including `api/`, `web/`, `src/`, `scripts/`, `package.json`, `package-lock.json`, and `vercel.json`, to your repository. If it is inside a larger repository, set Vercel's Root Directory to `entropy-results-dashboard`.
@@ -74,6 +76,7 @@ Browser checks use synthetic results and require Playwright's Chromium (or `ENTR
 | `web/vercel.js` | Google connection, API transport, account-partitioned browser storage. |
 | `web/indexer.js` | Resumable folder scan and atomic completed snapshots. |
 | `web/shared.js` | Shared password entry and saved-catalog viewer. |
+| `web/boards.js`, `boards.css`, `lib/boards.cjs` | Shared canvas UI, source-linked tiles and revision-protected persistent boards. |
 | `src/Core.gs` | Shared pure path classification and metric/catalog transformations. |
 | `src/Index.html`, `Client.html`, `Styles.html` | Existing explorer interface. |
 | `scripts/build.cjs`, `dev.cjs` | Static build and local API server. |

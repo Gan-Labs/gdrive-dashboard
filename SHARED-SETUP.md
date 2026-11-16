@@ -18,7 +18,7 @@ The backend requests only `drive.readonly`. It reads Figures and descendants; it
 
 In the Vercel `gdrive-dashboard` project, open **Storage** and create or connect a **Blob store with Private access**. Connect it to **Production**. Confirm it supplies `BLOB_READ_WRITE_TOKEN` to the project. Do not create a public store for the catalog.
 
-The app stores catalog snapshots, scan checkpoints, and cached figure thumbnails here. It uses Vercel Queues for background work; the `drive-index` consumer is declared in `vercel.json`, and the SDK authenticates automatically on Vercel. If Vercel requests enabling its Queues beta for the project/team, enable it before indexing. No queue token is entered in the frontend.
+The app stores catalog snapshots, scan checkpoints, cached figure thumbnails, and shared research boards here. It uses Vercel Queues for background work; the `drive-index` consumer is declared in `vercel.json`, and the SDK authenticates automatically on Vercel. If Vercel requests enabling its Queues beta for the project/team, enable it before indexing. No queue token is entered in the frontend.
 
 Blob storage, queue operations, function execution, and bandwidth use your Vercel allowances. Check your plan's limits. No paid upgrade or resource has been provisioned by this source change. Previous snapshots and cached image versions are retained; repeated refreshes can grow storage. There is no automatic deletion job.
 
@@ -48,9 +48,22 @@ Keep the existing build settings: **Other**, `npm run build`, output `public`, N
 
 If the queue or Drive connection fails, work pauses/resumes from a stored checkpoint. Repeated failures stop retrying and show a Resume action. Check the Vercel worker logs and service-account sharing before resuming. Workers use conditional writes to avoid concurrent viewers corrupting progress. An expired pagination cursor restarts only the current folder with file-ID deduplication.
 
+## Saved research boards
+
+In shared mode, **Research boards** appears in the sidebar. Create a named board, or use **Pin to board** on a figure/file. Experiment details have **Pin metrics to board**; CSV sources appear as tables, and images/charts use cached previews. Multiple selected figures can be pinned together from the selection tray.
+
+- Arrange results on the dotted canvas: drag tile headers, resize their lower-right corners, pan empty space or scroll, and use zoom or **Fit content**. Arrow keys on a tile header move it; Shift + arrows resize it.
+- Use **Add note** for observations. Edit the board title/description, then click **Save board**. Pinning a result saves it immediately; later layout/note edits need Save. Unsaved changes have an explicit status and a page-leave warning.
+- **Copy board link** opens that same board for another collaborator after they enter the dashboard password. Layouts, titles and notes live in private Blob storage, so they survive page reloads, browser changes and server restarts. All password holders can edit; this is shared access, not individual user roles.
+- Edits are not synchronized live. If another person saves first, your stale save is rejected and your draft stays intact. Reload the saved version or **Save draft as a copy** rather than overwrite their changes.
+- Tiles link to indexed sources, rather than freezing another copy of the experiment. They follow the current published catalog after refresh; missing sources are labeled unavailable and the tile/layout is preserved. Expanding an image loads its original on demand. For a frozen research record, keep immutable source files in Drive.
+- Each workspace supports up to 50 boards and 100 tiles per board, within bounded request/storage sizes. Removing a tile does not delete its Drive source. Boards are namespaced to the configured root folder; changing the root switches workspaces, preserving the old data.
+
+No additional environment variable or storage service is needed beyond the shared setup above. Personal OAuth mode and Apps Script do not expose shared boards. If an index predates the boards feature, refresh it once before pinning experiment metrics so the backend has its experiment references.
+
 ## Access and lifecycle
 
-- Anyone who knows the dashboard password can browse the indexed results, including images served using the backend account, and request an index refresh. Do not use this mode for results that should be shown to only a subset of password holders.
+- Anyone who knows the dashboard password can browse the indexed results, including images served using the backend account, edit shared boards, and request an index refresh. Do not use this mode for results that should be shown to only a subset of password holders.
 - Change `DASHBOARD_PASSWORD` and redeploy to invalidate existing password sessions. **Sign out** clears the browser's session cookie. No Google credential is delivered to viewers.
 - Old Vercel deployment URLs retain their old environment settings. Protect or remove those deployments when revoking access, rather than relying on changing only the production alias.
 - The shared catalog is independent of browser storage and serverless instance memory. Its record pages are bounded so large folder trees fit Vercel's function response limit.
@@ -60,6 +73,6 @@ If the queue or Drive connection fails, work pauses/resumes from a stored checkp
 
 ## Validation and limitations
 
-Local tests exercise shared authentication, session persistence, cached collaborator access, duplicate workers, failed refreshes, queue-submission failures, and snapshot publication with synthetic Drive/storage/queue implementations. Real service-account permissions, private Blob access, queue delivery, and production thumbnail latency require testing after these settings are configured. Do not infer live activation from a passing local build.
+Local tests exercise shared authentication, session persistence, cached collaborator access, duplicate workers, failed refreshes, queue-submission failures, snapshot publication, saved board layouts/notes, source validation and concurrent-edit protection with synthetic Drive/storage/queue implementations. Browser checks cover pinning figures/CSV/metrics, drag/resize, reload, a second collaborator, edit-conflict recovery and mobile overflow. Real service-account permissions, private Blob access, queue delivery, and production thumbnail latency require testing after these settings are configured. Do not infer live activation from a passing local build.
 
 References: [Google service accounts](https://developers.google.com/identity/protocols/oauth2/service-account), [private Blob](https://vercel.com/docs/vercel-blob/private-storage), [consistent private reads](https://vercel.com/changelog/vercel-blob-now-supports-consistent-reads-on-private-storage), [Vercel Queues](https://vercel.com/docs/queues/quickstart).

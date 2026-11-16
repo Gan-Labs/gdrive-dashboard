@@ -112,6 +112,7 @@
       if (!response || !response.catalog || !Array.isArray(response.catalog.records)) throw new Error('The catalog response was incomplete. Please try again.');
       state.catalog = response.catalog; state.status = response.status;
       hydrateFilters(); render(); updateStatus();
+      document.dispatchEvent(new CustomEvent('entropy:catalog'));
     } catch (error) {
       if (token !== loadToken) return;
       $('indexedAt').textContent = 'Connection needs attention';
@@ -296,7 +297,9 @@
       const heading = element('div', 'figure-heading'); heading.append(tag(r.dataset, true), element('span', 'figure-date', dateLabel(r.modifiedTime)));
       const title = element('h3'); title.append(button(prettyName(r.name), '', function () { openFile(r); }));
       const path = element('div', 'figure-path', r.runName + (r.className ? ' / ' + r.className : '') + ' · ' + r.analysis); path.title = r.path;
-      info.append(heading, title, path, makeTags(r)); card.append(image, info); grid.append(card); observer.observe(holder);
+      info.append(heading, title, path, makeTags(r));
+      if (window.EntropyBoards) info.append(window.EntropyBoards.fileButton(r));
+      card.append(image, info); grid.append(card); observer.observe(holder);
     });
     $('results').append(grid);
   }
@@ -385,6 +388,7 @@
       ['Updated', dateLabel(record.modifiedTime, true)], ['File size', bytes(record.size)], ['Path', record.path]]
       .forEach(function (pair) { addDescription(dl, pair[0], pair[1]); });
     info.append(dl, link(window.entropyTransport?.shared ? 'Open / download original ↗' : 'Open original in Drive ↗', driveUrl(record.id), 'button primary'), link('Open experiment folder ↗', driveUrl(record.parentId, true), 'button'));
+    if (window.EntropyBoards) info.append(window.EntropyBoards.fileButton(record));
     const related = (record.relatedIds || []).map(function (id) { return state.catalog.records.find(function (r) { return r.id === id; }); }).filter(Boolean);
     if (related.length) {
       info.append(element('h3', '', 'Metadata & source files'));
@@ -439,6 +443,7 @@
     currentRecord = null; openDialog(run.name, 'EXPERIMENT DETAIL');
     const content = element('div', 'run-detail'); content.append(element('p', '', run.path), makeTags(run));
     const actions = element('p'); actions.append(button('Browse ' + run.figures + ' figures', 'button primary', function () { showRunFigures(run); }), document.createTextNode(' '), link('Open experiment folder ↗', driveUrl(run.id, true), 'button')); content.append(actions);
+    if (window.EntropyBoards) actions.append(window.EntropyBoards.runButton(run));
     content.append(element('h3', '', 'Reported metrics'));
     if (!run.metrics.length) content.append(element('p', '', 'No recognized summary metrics were found. Inspect the experiment’s source files for further details.'));
     else {
@@ -501,6 +506,9 @@
     if (!editing && $('viewer').open && ['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); navigateFigure(event.key === 'ArrowRight' ? 1 : -1); }
     if (event.key === 'Escape') { document.body.classList.remove('sidebar-open'); $('browseToggle').setAttribute('aria-expanded', 'false'); }
   });
+  window.EntropyExplorer = { getCatalog: function () { return state.catalog; }, rpc: rpc, toast: toast, openFile: openFile,
+    selected: function () { return state.catalog ? state.catalog.records.filter(function (r) { return state.selected.has(r.id); }) : []; },
+    refresh: function () { if (state.catalog) render(); } };
   if (window.google && google.script && google.script.url) google.script.url.getLocation(function (location) { restore(location.parameter); load(); });
   else { restore(Object.fromEntries(new URLSearchParams(location.search))); load(); }
 }());

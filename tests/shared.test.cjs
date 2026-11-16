@@ -156,3 +156,21 @@ test('old queue deliveries cannot pause or replace an explicitly resumed scan', 
   await h.dashboard.processJob(current); await h.drain();
   assert.equal((await h.dashboard.status()).active, false);
 });
+test('board endpoints require authentication and share saved files/metrics across collaborator sessions', async () => {
+  const { randomUUID } = require('node:crypto');
+  const h = fixture(); await h.dashboard.startIndex(); await h.drain();
+  for (const action of ['listBoards', 'getBoard', 'saveBoard']) assert.equal((await request(h.dashboard, action)).status, 401);
+  const first = await login(h.dashboard), second = await login(h.restart());
+  const board = { title: 'Research board', items: [
+    { id: randomUUID(), kind: 'file', fileId: 'plot1', x: 40, y: 40, width: 500, height: 360 },
+    { id: randomUUID(), kind: 'run', runId: 'group', x: 580, y: 40, width: 500, height: 360 }
+  ] };
+  const save = await request(h.dashboard, 'saveBoard', { board, revision: 0 }, first);
+  assert.equal(save.status, 200); assert.equal(save.body.board.items[1].source.name, 'ResNet HMDB51');
+  const read = await request(h.restart(), 'getBoard', { id: save.body.board.id }, second);
+  assert.deepEqual(read.body.board, save.body.board);
+  assert.equal((await request(h.restart(), 'listBoards', {}, second)).body.boards[0].items, 2);
+  assert.equal((await request(h.restart(), 'saveBoard', { board: save.body.board, revision: 0 }, second)).status, 409);
+  board.items[0].fileId = 'outside';
+  assert.equal((await request(h.restart(), 'saveBoard', { board, revision: 0 }, second)).status, 403);
+});

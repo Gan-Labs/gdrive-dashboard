@@ -74,6 +74,8 @@
     if (name === 'setup') name = 'startIndex';
     if (name === 'continueIndex') await new Promise(resolve => setTimeout(resolve, 1500));
     return api(name, ['getPreview', 'getFileDetail'].includes(name) ? { id: args[0], original: !!args[1] } : {});
+  }, async boardApi(action, args = {}) {
+    await ready; return api(action, args);
   } };
   api('session').then(() => { connected = true; document.body.classList.remove('needs-auth'); authorize(); }).catch(error => showAuth(error.message));
 }());

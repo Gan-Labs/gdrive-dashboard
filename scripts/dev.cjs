@@ -10,8 +10,8 @@ for (const name of ['.env.local', '.env']) {
 }
 require('./build.cjs');
 const handler = require('../api/dashboard.js');
-const types = { '.html': 'text/html', '.js': 'text/javascript' };
-const files = new Set(['index.html', 'core.js', 'config.js', 'indexer.js', 'vercel.js', 'shared.js']);
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const files = new Set(['index.html', 'core.js', 'config.js', 'indexer.js', 'vercel.js', 'shared.js', 'boards.js', 'boards.css']);
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/original') return require('../api/original.js')(req, res);
@@ -19,7 +19,7 @@ http.createServer(async (req, res) => {
     let size = 0; const chunks = [];
     for await (const chunk of req) {
       size += chunk.length;
-      if (size > 16000) { res.writeHead(413).end(); return; }
+      if (size > 512000) { res.writeHead(413).end(); return; }
       chunks.push(chunk);
     }
     req.body = Buffer.concat(chunks).toString('utf8');
